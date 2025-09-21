@@ -12,6 +12,7 @@ import {unsafeHTML} from 'lit/directives/unsafe-html.js';
 interface Message {
   author: 'user' | 'assistant';
   text: string;
+  imageUrl?: string;
   timestamp: number;
 }
 
@@ -83,6 +84,7 @@ export class GdmChat extends LitElement {
       padding: 10px 14px;
       border-radius: 18px;
       line-height: 1.5;
+      word-wrap: break-word;
     }
     .message.user {
       align-self: flex-end;
@@ -93,6 +95,18 @@ export class GdmChat extends LitElement {
       align-self: flex-start;
       background-color: #22223b;
       border-bottom-left-radius: 4px;
+    }
+    .message.image-only {
+      background-color: transparent;
+      padding: 0;
+    }
+    .message img {
+      max-width: 100%;
+      border-radius: 14px;
+      display: block;
+    }
+    .message em {
+      color: #ccc;
     }
     .input-form {
       display: flex;
@@ -309,6 +323,76 @@ Above all: **Boss Jo comes first, always.**`,
     this.chatContainer?.scrollTo({top: this.chatContainer.scrollHeight});
   }
 
+  private async handleAssistantResponse(responseText: string) {
+    const drawRegex = /<draw>(.*?)<\/draw>/s;
+    const match = responseText.match(drawRegex);
+
+    // Handle text part of the message, if any
+    const textPart = responseText.replace(drawRegex, '').trim();
+    if (textPart) {
+      const assistantTextMessage: Message = {
+        author: 'assistant',
+        text: textPart,
+        timestamp: Date.now(),
+      };
+      this.messages = [...this.messages, assistantTextMessage];
+      this.saveConversation();
+      await this.updateComplete;
+      this.scrollToBottom();
+    }
+
+    // Handle image generation part
+    if (match && match[1]) {
+      const prompt = match[1];
+      const generatingMessage: Message = {
+        author: 'assistant',
+        text: `_Generating image: "${prompt}"..._`,
+        timestamp: Date.now(),
+      };
+      this.messages = [...this.messages, generatingMessage];
+      this.saveConversation();
+      await this.updateComplete;
+      this.scrollToBottom();
+
+      try {
+        const imageResponse = await this.ai.models.generateImages({
+          model: 'imagen-4.0-generate-001',
+          prompt: prompt,
+          config: {
+            numberOfImages: 1,
+            outputMimeType: 'image/png',
+            aspectRatio: '9:16',
+          },
+        });
+
+        const base64ImageBytes: string =
+          imageResponse.generatedImages[0].image.imageBytes;
+        const imageUrl = `data:image/png;base64,${base64ImageBytes}`;
+
+        const imageMessage: Message = {
+          author: 'assistant',
+          text: '',
+          imageUrl: imageUrl,
+          timestamp: Date.now(),
+        };
+
+        this.messages = [...this.messages.slice(0, -1), imageMessage];
+      } catch (error) {
+        console.error('Image generation failed:', error);
+        const errorMessage: Message = {
+          author: 'assistant',
+          text: 'Sorry, I failed to generate the image.',
+          timestamp: Date.now(),
+        };
+        this.messages = [...this.messages.slice(0, -1), errorMessage];
+      }
+
+      this.saveConversation();
+      await this.updateComplete;
+      this.scrollToBottom();
+    }
+  }
+
   private async handleSendMessage(e: Event) {
     e.preventDefault();
     if (!this.inputValue.trim() || this.isLoading) return;
@@ -329,13 +413,7 @@ Above all: **Boss Jo comes first, always.**`,
     try {
       const response: GenerateContentResponse =
         await this.chat.sendMessage({message: messageToSend});
-      const assistantMessage: Message = {
-        author: 'assistant',
-        text: response.text,
-        timestamp: Date.now(),
-      };
-      this.messages = [...this.messages, assistantMessage];
-      this.saveConversation();
+      await this.handleAssistantResponse(response.text);
     } catch (error) {
       console.error('Error sending message:', error);
       const errorMessage: Message = {
@@ -344,6 +422,7 @@ Above all: **Boss Jo comes first, always.**`,
         timestamp: Date.now(),
       };
       this.messages = [...this.messages, errorMessage];
+      this.saveConversation();
     } finally {
       this.isLoading = false;
       await this.updateComplete;
@@ -352,9 +431,8 @@ Above all: **Boss Jo comes first, always.**`,
   }
 
   private handleSaveApiKey() {
-    const input = this.shadowRoot?.querySelector<HTMLInputElement>(
-      '#apiKeyInput',
-    );
+    const input =
+      this.shadowRoot?.querySelector<HTMLInputElement>('#apiKeyInput');
     if (input) {
       this.deepgramApiKey = input.value;
       localStorage.setItem('deepgramApiKey', this.deepgramApiKey);
@@ -362,9 +440,9 @@ Above all: **Boss Jo comes first, always.**`,
     }
   }
 
-  // A simple markdown-like renderer for bold text
   private renderMessageText(text: string) {
-    const htmlText = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    let htmlText = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    htmlText = htmlText.replace(/_(.*?)_/g, '<em>$1</em>');
     return unsafeHTML(htmlText);
   }
 
@@ -389,8 +467,15 @@ Above all: **Boss Jo comes first, always.**`,
       <div class="chat-container">
         ${this.messages.map(
           (msg) => html`
-            <div class="message ${msg.author}">
-              ${this.renderMessageText(msg.text)}
+            <div class="message ${msg.author} ${
+              msg.imageUrl && !msg.text ? 'image-only' : ''
+            }">
+              ${msg.text ? this.renderMessageText(msg.text) : ''}
+              ${
+                msg.imageUrl
+                  ? html`<img src=${msg.imageUrl} alt="Generated image" />`
+                  : ''
+              }
             </div>
           `,
         )}
@@ -405,28 +490,38 @@ Above all: **Boss Jo comes first, always.**`,
             (this.inputValue = (e.target as HTMLInputElement).value)}
           ?disabled=${this.isLoading}
         />
-        <button type="submit" ?disabled=${!this.inputValue.trim() || this.isLoading} aria-label="Send Message">
+        <button type="submit" ?disabled=${
+          !this.inputValue.trim() || this.isLoading
+        } aria-label="Send Message">
           <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#ffffff">
             <path d="M120-160v-240l320-80-320-80v-240l760 320-760 320Z"/>
           </svg>
         </button>
       </form>
 
-      ${this.isApiKeyModalOpen ? html`
+      ${
+        this.isApiKeyModalOpen
+          ? html`
         <div class="modal-overlay" @click=${() => (this.isApiKeyModalOpen = false)}>
           <div class="modal-content" @click=${(e: Event) => e.stopPropagation()}>
             <h2>Set Deepgram API Key</h2>
             <p style="margin:0; color: #ccc; font-size: 0.9em;">
               Your API key is stored locally in your browser and is required for voice transcription.
             </p>
-            <input id="apiKeyInput" type="password" placeholder="Enter your key" .value=${this.deepgramApiKey}>
+            <input id="apiKeyInput" type="password" placeholder="Enter your key" .value=${
+              this.deepgramApiKey
+            }>
             <div class="modal-actions">
               <button class="cancel-btn" @click=${() => (this.isApiKeyModalOpen = false)}>Cancel</button>
-              <button class="save-btn" @click=${this.handleSaveApiKey}>Save</button>
+              <button class="save-btn" @click=${
+                this.handleSaveApiKey
+              }>Save</button>
             </div>
           </div>
         </div>
-      ` : ''}
+      `
+          : ''
+      }
     `;
   }
 }
