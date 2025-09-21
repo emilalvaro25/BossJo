@@ -8,7 +8,7 @@ import {GoogleGenAI, LiveServerMessage, Modality, Session} from '@google/genai';
 import {LitElement, css, html} from 'lit';
 import {customElement, state} from 'lit/decorators.js';
 import {createBlob, decode, decodeAudioData} from './utils';
-import './visual-3d';
+import './visual-2d';
 
 interface MessageLog {
   timestamp: number;
@@ -25,6 +25,10 @@ export class GdmLiveAudio extends LitElement {
   @state() error = '';
   @state() private messageLogs: MessageLog[] = [];
   @state() private isLogVisible = false;
+  @state() private isSettingsVisible = false;
+  @state() private visualizerShape: 'orb' | 'bars' = 'orb';
+  @state() private colorScheme: 'default' | 'fire' | 'ocean' = 'default';
+  @state() private animationSpeed = 0.1;
 
   private client: GoogleGenAI;
   private session: Session;
@@ -88,10 +92,10 @@ export class GdmLiveAudio extends LitElement {
       }
     }
 
-    .logs-toggle-btn {
+    .logs-toggle-btn,
+    .settings-toggle-btn {
       position: absolute;
       top: 16px;
-      left: 16px;
       z-index: 20;
       background: rgba(255, 255, 255, 0.1);
       border: 1px solid rgba(255, 255, 255, 0.2);
@@ -104,10 +108,19 @@ export class GdmLiveAudio extends LitElement {
       align-items: center;
       justify-content: center;
     }
-    .logs-toggle-btn:hover {
+    .logs-toggle-btn {
+      left: 16px;
+    }
+    .settings-toggle-btn {
+      right: 16px;
+    }
+    .logs-toggle-btn:hover,
+    .settings-toggle-btn:hover {
       background: rgba(255, 255, 255, 0.2);
     }
-    .logs-modal-overlay {
+
+    .logs-modal-overlay,
+    .settings-modal-overlay {
       position: fixed;
       inset: 0;
       background: rgba(0, 0, 0, 0.7);
@@ -116,7 +129,8 @@ export class GdmLiveAudio extends LitElement {
       align-items: center;
       justify-content: center;
     }
-    .logs-modal {
+    .logs-modal,
+    .settings-modal {
       background: #10141f;
       border-radius: 12px;
       border: 1px solid rgba(255, 255, 255, 0.2);
@@ -126,7 +140,8 @@ export class GdmLiveAudio extends LitElement {
       flex-direction: column;
       color: white;
     }
-    .logs-header {
+    .logs-header,
+    .settings-header {
       padding: 16px;
       border-bottom: 1px solid rgba(255, 255, 255, 0.2);
       display: flex;
@@ -135,19 +150,24 @@ export class GdmLiveAudio extends LitElement {
       font-size: 1.2em;
       font-weight: bold;
     }
-    .logs-header button {
+    .logs-header button,
+    .settings-header button {
       background: none;
       border: none;
       color: white;
       font-size: 24px;
       cursor: pointer;
     }
-    .logs-body {
+    .logs-body,
+    .settings-body {
       padding: 16px;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
       gap: 12px;
+    }
+    .settings-body {
+      gap: 24px;
     }
     .log-entry {
       background: rgba(255, 255, 255, 0.05);
@@ -176,6 +196,39 @@ export class GdmLiveAudio extends LitElement {
     }
     .log-details {
       word-break: break-all;
+    }
+
+    .settings-section {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .settings-section h3 {
+      margin: 0;
+      font-size: 1.1em;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      padding-bottom: 8px;
+    }
+    .radio-group {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .radio-group label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+    .slider-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: flex-start;
+    }
+    .slider-group input[type="range"] {
+      width: 100%;
     }
   `;
 
@@ -519,6 +572,10 @@ export class GdmLiveAudio extends LitElement {
   private toggleLogs() {
     this.isLogVisible = !this.isLogVisible;
   }
+  
+  private toggleSettings() {
+    this.isSettingsVisible = !this.isSettingsVisible;
+  }
 
   render() {
     return html`
@@ -528,13 +585,18 @@ export class GdmLiveAudio extends LitElement {
             <path d="M160-160q-33 0-56.5-23.5T80-240v-480q0-33 23.5-56.5T160-800h640q33 0 56.5 23.5T880-720v480q0 33-23.5 56.5T800-160H160Zm0-80h640v-480H160v480Zm80-80h480v-80H240v80Zm0-120h480v-80H240v80Zm0-120h480v-80H240v80ZM160-240v-480 480Z"/>
           </svg>
         </button>
-        
+        <button class="settings-toggle-btn" @click=${this.toggleSettings} title="Visualizer Settings">
+          <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#ffffff">
+            <path d="M480-160q-33 0-56.5-23.5T400-240v-80q-20-4-39.5-11.5T324-348l-68 30q-32 14-64.5-2.5T159-389l-40-68q-14-25-2.5-57T189-582l61-39q-2-9-3-18.5t-1-19.5q0-7 .5-19.5t3-18.5l-61-39q-26-16-37.5-48t-1-57l40-68q14-32 46.5-46.5T256-850l68 30q17-10 36.5-17.5T399-848v-80q0-33 23.5-56.5T480-920q33 0 56.5 23.5T560-840v80q20 4 39.5 11.5T636-732l68-30q32-14 64.5 2.5T801-691l40 68q14 25 2.5 57T806-498l-61 39q2 9 3 18.5t1 19.5q0 7-.5 19.5t-3 18.5l61 39q26 16 37.5 48t1 57l-40 68q-14 32-46.5 46.5T704-190l-68-30q-17 10-36.5 17.5T561-192v80q0 33-23.5 56.5T480-160Zm0-80q13 0 21.5-8.5T510-270v-100q13-4 26-10t25-14l86 38q12 5 23.5-1t14.5-17l40-68q5-12-1-23.5t-17-14.5l-86-56q5-12 8-25.5t3-26.5q0-13-3-26.5t-8-25.5l86-56q12-5 17-14.5t1-23.5l-40-68q-5-12-14.5-17t-23.5-1l-86 38q-12-8-25-14t-26-10v-100q0-13-8.5-21.5T480-840q-13 0-21.5 8.5T450-810v100q-13 4-26 10t-25 14l-86-38q-12-5-23.5 1T275-703l-40 68q-5 12 1 23.5t17 14.5l86 56q-5 12-8 25.5t-3 26.5q0 13 3 26.5t8 25.5l-86 56q-12 5-17 14.5t-1 23.5l40 68q5 12 14.5 17t23.5 1l86-38q12 8 25 14t26 10v100q0 13 8.5 21.5T480-240Zm0-240q50 0 85-35t35-85q0-50-35-85t-85-35q-50 0-85 35t-35 85q0 50 35 85t85 35Zm0-120Z"/>
+          </svg>
+        </button>
+
         ${this.isLogVisible ? html`
           <div class="logs-modal-overlay" @click=${this.toggleLogs}>
             <div class="logs-modal" @click=${(e: Event) => e.stopPropagation()}>
               <div class="logs-header">
                 <span>WhatsApp Message Log</span>
-                <button @click=${this.toggleLogs}>&times;</button>
+                <button @click=${this.toggleLogs} aria-label="Close message logs">&times;</button>
               </div>
               <div class="logs-body">
                 ${this.messageLogs.length === 0 ? html`<p style="text-align: center; color: #aaa;">No messages sent yet.</p>` : ''}
@@ -551,6 +613,63 @@ export class GdmLiveAudio extends LitElement {
                     <div class="log-details">Details: ${log.details}</div>
                   </div>
                 `)}
+              </div>
+            </div>
+          </div>
+        ` : ''}
+
+        ${this.isSettingsVisible ? html`
+          <div class="settings-modal-overlay" @click=${this.toggleSettings}>
+            <div class="settings-modal" @click=${(e: Event) => e.stopPropagation()}>
+              <div class="settings-header">
+                <span>Visualizer Settings</span>
+                <button @click=${this.toggleSettings} aria-label="Close settings">&times;</button>
+              </div>
+              <div class="settings-body">
+                <div class="settings-section">
+                  <h3 id="shape-label">Shape</h3>
+                  <div class="radio-group" role="radiogroup" aria-labelledby="shape-label">
+                    <label>
+                      <input type="radio" name="shape" value="orb" ?checked=${this.visualizerShape === 'orb'} @change=${() => this.visualizerShape = 'orb'}>
+                      Orb
+                    </label>
+                    <label>
+                      <input type="radio" name="shape" value="bars" ?checked=${this.visualizerShape === 'bars'} @change=${() => this.visualizerShape = 'bars'}>
+                      Bars
+                    </label>
+                  </div>
+                </div>
+                <div class="settings-section">
+                  <h3 id="color-label">Color Scheme</h3>
+                  <div class="radio-group" role="radiogroup" aria-labelledby="color-label">
+                    <label>
+                      <input type="radio" name="colorScheme" value="default" ?checked=${this.colorScheme === 'default'} @change=${() => this.colorScheme = 'default'}>
+                      Default
+                    </label>
+                    <label>
+                      <input type="radio" name="colorScheme" value="fire" ?checked=${this.colorScheme === 'fire'} @change=${() => this.colorScheme = 'fire'}>
+                      Fire
+                    </label>
+                    <label>
+                      <input type="radio" name="colorScheme" value="ocean" ?checked=${this.colorScheme === 'ocean'} @change=${() => this.colorScheme = 'ocean'}>
+                      Ocean
+                    </label>
+                  </div>
+                </div>
+                <div class="settings-section">
+                  <h3>Animation Speed</h3>
+                  <div class="slider-group">
+                    <label for="speed-slider">Responsiveness: ${this.animationSpeed.toFixed(2)}</label>
+                    <input
+                      id="speed-slider"
+                      type="range"
+                      min="1"
+                      max="30"
+                      .value=${String(this.animationSpeed * 100)}
+                      @input=${(e: Event) => this.animationSpeed = parseFloat((e.target as HTMLInputElement).value) / 100}
+                    />
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -600,9 +719,13 @@ export class GdmLiveAudio extends LitElement {
         </div>
 
         <div id="status"> ${this.error || this.status} </div>
-        <gdm-live-audio-visuals-3d
+        <gdm-live-audio-visuals-2d
           .inputNode=${this.inputNode}
-          .outputNode=${this.outputNode}></gdm-live-audio-visuals-3d>
+          .outputNode=${this.outputNode}
+          .shape=${this.visualizerShape}
+          .colorScheme=${this.colorScheme}
+          .animationSpeed=${this.animationSpeed}
+          ></gdm-live-audio-visuals-2d>
       </div>
     `;
   }
