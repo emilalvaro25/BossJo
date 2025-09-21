@@ -12,6 +12,7 @@ import {createBlob, decode, decodeAudioData} from './utils';
 import './visual-2d';
 import './visual-3d';
 import './chat';
+import './tasks';
 
 interface Message {
   author: 'user' | 'assistant';
@@ -111,6 +112,7 @@ export class GdmLiveAudio extends LitElement {
     }
 
     .chat-toggle-btn,
+    .tasks-toggle-btn,
     .settings-toggle-btn {
       position: absolute;
       top: 16px;
@@ -129,10 +131,14 @@ export class GdmLiveAudio extends LitElement {
     .chat-toggle-btn {
       left: 16px;
     }
+    .tasks-toggle-btn {
+      left: 72px;
+    }
     .settings-toggle-btn {
       right: 16px;
     }
     .chat-toggle-btn:hover,
+    .tasks-toggle-btn:hover,
     .settings-toggle-btn:hover {
       background: rgba(255, 255, 255, 0.2);
     }
@@ -652,6 +658,11 @@ Above all: **Boss Jo comes first, always.**`,
         <a href="/chat.html" class="chat-toggle-btn" title="Open Chat">
           <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#ffffff">
             <path d="M240-400h320v-80H240v80Zm0-120h480v-80H240v80Zm0-120h480v-80H240v80ZM80-80v-720q0-33 23.5-56.5T160-880h640q33 0 56.5 23.5T880-800v480q0 33-23.5 56.5T800-240H240L80-80Zm126-240h594v-480H160v525l46-45Zm-46 0v-480 480Z"/>
+          </svg>
+        </a>
+        <a href="/tasks.html" class="tasks-toggle-btn" title="Open Tasks">
+          <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#ffffff">
+            <path d="M340-240v-80h280v80H340Zm0-160v-80h280v80H340Zm0-160v-80h280v80H340Zm-140 80q-17 0-28.5-11.5T160-360q0-17 11.5-28.5T200-400q17 0 28.5 11.5T240-360q0 17-11.5 28.5T200-320Zm0-160q-17 0-28.5-11.5T160-520q0-17 11.5-28.5T200-560q17 0 28.5 11.5T240-520q0 17-11.5 28.5T200-480Zm0-160q-17 0-28.5-11.5T160-680q0-17 11.5-28.5T200-720q17 0 28.5 11.5T240-680q0 17-11.5 28.5T200-640ZM80-80v-800h800v800H80Z"/>
           </svg>
         </a>
         <button class="settings-toggle-btn" @click=${this.toggleSettings} title="Visualizer Settings">
