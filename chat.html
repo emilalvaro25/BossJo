@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chat with Beatrice</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background-color: #100c14;
+      color: white;
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "lit": "https://esm.sh/lit@^3.3.0",
+      "lit/": "https://esm.sh/lit@^3.3.0/",
+      "@google/genai": "https://esm.sh/@google/genai@^1.15.0"
+    }
+  }
+  </script>
+</head>
+<body>
+  <gdm-chat></gdm-chat>
+  <script type="module" src="/chat.js"></script>
+</body>
+</html>

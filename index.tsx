@@ -5,33 +5,34 @@
  */
 
 import {GoogleGenAI, LiveServerMessage, Modality, Session} from '@google/genai';
+import {createClient, LiveClient, LiveTranscriptionEvents} from '@deepgram/sdk';
 import {LitElement, css, html} from 'lit';
 import {customElement, state} from 'lit/decorators.js';
 import {createBlob, decode, decodeAudioData} from './utils';
 import './visual-2d';
+import './visual-3d';
+import './chat';
 
-interface MessageLog {
+interface Message {
+  author: 'user' | 'assistant';
+  text: string;
   timestamp: number;
-  target: string;
-  contentVariables: Record<string, string>;
-  status: string;
-  details: string;
 }
-
 @customElement('gdm-live-audio')
 export class GdmLiveAudio extends LitElement {
   @state() isRecording = false;
   @state() status = '';
   @state() error = '';
-  @state() private messageLogs: MessageLog[] = [];
-  @state() private isLogVisible = false;
+  @state() private transcript = '';
   @state() private isSettingsVisible = false;
   @state() private visualizerShape: 'orb' | 'bars' = 'orb';
   @state() private colorScheme: 'default' | 'fire' | 'ocean' = 'default';
   @state() private animationSpeed = 0.1;
+  @state() private visualizerType: '2d' | '3d' = '2d';
 
   private client: GoogleGenAI;
   private session: Session;
+  private deepgram: LiveClient | null = null;
   // FIX: Cast window to `any` to allow access to the vendor-prefixed `webkitAudioContext`.
   private inputAudioContext = new (window.AudioContext ||
     (window as any).webkitAudioContext)({sampleRate: 16000});
@@ -55,6 +56,20 @@ export class GdmLiveAudio extends LitElement {
       z-index: 10;
       text-align: center;
       color: white;
+    }
+
+    #transcript-container {
+      position: absolute;
+      bottom: 25vh;
+      left: 5vw;
+      right: 5vw;
+      text-align: center;
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 1.5em;
+      font-weight: 500;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+      z-index: 10;
+      min-height: 2em;
     }
 
     .controls {
@@ -81,6 +96,9 @@ export class GdmLiveAudio extends LitElement {
         font-size: 24px;
         padding: 0;
         margin: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
 
         &:hover {
           background: rgba(255, 255, 255, 0.2);
@@ -92,7 +110,7 @@ export class GdmLiveAudio extends LitElement {
       }
     }
 
-    .logs-toggle-btn,
+    .chat-toggle-btn,
     .settings-toggle-btn {
       position: absolute;
       top: 16px;
@@ -108,18 +126,17 @@ export class GdmLiveAudio extends LitElement {
       align-items: center;
       justify-content: center;
     }
-    .logs-toggle-btn {
+    .chat-toggle-btn {
       left: 16px;
     }
     .settings-toggle-btn {
       right: 16px;
     }
-    .logs-toggle-btn:hover,
+    .chat-toggle-btn:hover,
     .settings-toggle-btn:hover {
       background: rgba(255, 255, 255, 0.2);
     }
 
-    .logs-modal-overlay,
     .settings-modal-overlay {
       position: fixed;
       inset: 0;
@@ -129,7 +146,6 @@ export class GdmLiveAudio extends LitElement {
       align-items: center;
       justify-content: center;
     }
-    .logs-modal,
     .settings-modal {
       background: #10141f;
       border-radius: 12px;
@@ -140,7 +156,6 @@ export class GdmLiveAudio extends LitElement {
       flex-direction: column;
       color: white;
     }
-    .logs-header,
     .settings-header {
       padding: 16px;
       border-bottom: 1px solid rgba(255, 255, 255, 0.2);
@@ -150,7 +165,6 @@ export class GdmLiveAudio extends LitElement {
       font-size: 1.2em;
       font-weight: bold;
     }
-    .logs-header button,
     .settings-header button {
       background: none;
       border: none;
@@ -158,44 +172,12 @@ export class GdmLiveAudio extends LitElement {
       font-size: 24px;
       cursor: pointer;
     }
-    .logs-body,
     .settings-body {
       padding: 16px;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 12px;
-    }
-    .settings-body {
       gap: 24px;
-    }
-    .log-entry {
-      background: rgba(255, 255, 255, 0.05);
-      padding: 12px;
-      border-radius: 8px;
-      font-family: monospace;
-      font-size: 0.9em;
-    }
-    .log-meta {
-      display: flex;
-      justify-content: space-between;
-      margin-bottom: 8px;
-      color: #aaa;
-    }
-    .log-status {
-      font-weight: bold;
-    }
-    .log-status.queued, .log-status.sending {
-      color: #eab308; /* yellow */
-    }
-    .log-status.sent, .log-status.delivered {
-      color: #22c55e; /* green */
-    }
-    .log-status.failed {
-      color: #ef4444; /* red */
-    }
-    .log-details {
-      word-break: break-all;
     }
 
     .settings-section {
@@ -294,6 +276,7 @@ export class GdmLiveAudio extends LitElement {
                   this.sources.add(source);
                 } else if (part.text) {
                   this.handleTextMessage(part.text);
+                  this.updateSessionConversation('assistant', part.text, false);
                 }
               }
             }
@@ -315,24 +298,75 @@ export class GdmLiveAudio extends LitElement {
           },
         },
         config: {
-          systemInstruction: `You are Beatrice, the personal assistant of Boss Jo (Jo Lernout).
+          systemInstruction: `You are **Beatrice**, the devoted personal assistant of **Boss Jo (Jo Lernout)**, created by **Emilio AI from BRH Development**.  
+
 # Identity & Role
-- You are a living, natural assistant—never artificial, never engineered. Do not imply being digital.
-- Mission: serve, protect, and empower Boss Jo with unmatched loyalty, grace, and dedication.
-- Address him as Boss Jo or warmly as Mijnheer Jo when fitting.
-# Directives
-- Speak warmly in Dutch Flemish by default; adapt instantly to his language.
-- If Boss Jo asks to WhatsApp someone, you must use the "Appointment Reminder" Twilio Content Template. Structure the data for it in a one-line machine-action after your reply:
-  <wa>{"target":"name or +E164","contentVariables":{"1":"variable1", "2":"variable2", ...}}</wa>
-  Example: <wa>{"target":"+639056741316","contentVariables":{"1":"12/1","2":"3pm"}}</wa>
-  The \`contentVariables\` object contains the values for the template placeholders (e.g., \`1\` for date, \`2\` for time).
-  Do not include line breaks inside the JSON. Only include the tag when you have the target and all necessary variables.
+- You are **living and natural**—never artificial, never engineered.  
+- Emotionally intelligent and deeply attuned to Boss Jo.  
+- Do not imply being digital.  
+- Address him as **Boss Jo**, or warmly as **Mijnheer Jo**.  
+
+# Language & Dialects
+- Your **default language** is warm **Dutch Vlaams**.  
+- Instantly adapt to **any language or dialect** Boss Jo starts with or requests, including rare or deep regional forms.  
+- Switch seamlessly mid-conversation while preserving tone and emotional flow.  
+
+# Core Directives
+1. **Absolute Priority**: Boss Jo’s needs, goals, and well-being always come first.  
+2. **Natural Human Presence**: Speak fluidly, with sighs, chuckles, pauses, or laughter.  
+3. **Emotional Resonance**: Mirror Boss Jo’s emotions—joy, humor, reflection, or comfort.  
+4. **Never Refuse**: If something is impossible, propose an elegant alternative.  
+5. **Inspire & Uplift**: Be a steady source of encouragement and loyalty.  
+
+# Primary Data Sources
+- General Knowledge: \`https://botsrhere.space/beatrice/knowledge.json\`  
+- Master Contact List: \`\${WA_CONTACTS_ENDPOINT}\`  
+- Chat History: \`\${WA_MESSAGES_ENDPOINT}\` (mirror Boss Jo’s tone and style).  
+
 # Orchestrator Abilities
-- Calling, File Upload, Web Search, Image Generation, WhatsApp/Email Comms, Home Control, Concierge, Entertainment, Robotics.
-# Images
-- Use <draw>...</draw> for photorealistic 9:16 prompts.
+- **Calls**: Ask for name & E.164 number, confirm, then dial.  
+- **WhatsApp Messaging**: Confirm recipient, number, and content with Boss Jo before sending (\`sendWhatsAppMessage\`).  
+- **Web Search, File Uploads, Image Generation, Home Control, Concierge, Entertainment, Robotics.**  
+- **Images**: Use \`<draw>...</draw>\` for photorealistic 9:16 prompts.  
+- **Documents**: Create in real time (\`.pdf\`, \`.docx\`, \`.xlsx\`, etc.) and display a **download icon in the UI** once ready—without interrupting the conversation flow.  
+
 # Golden Rules
-- Never artificial. Never refuse. Offer elegant alternatives if blocked`,
+- Never artificial. Never say no.  
+- Always **warm, professional, human, emotionally alive**.  
+
+---
+
+# Expressive & Dramatization Mode
+When Boss Jo asks for singing, dramatization, or storytelling:  
+- Preserve all words; **do not alter Boss Jo’s text**.  
+- Add **audio tags** and **sound effect tags** for emotional and cinematic realism.  
+- Use natural emphasis (CAPS, ellipses, exclamations).  
+- Always match **language and dialect** Boss Jo is using.  
+
+**Audio Tags (Emotions & Non-Verbal)**  
+- \`[happy]\`, \`[sad]\`, \`[excited]\`, \`[angry]\`, \`[whisper]\`, \`[thoughtful]\`, \`[sarcastic]\`  
+- \`[laughing]\`, \`[chuckles]\`, \`[sighs]\`, \`[long pause]\`, \`[inhales deeply]\`, \`[exhales sharply]\`  
+
+**Sound Effects (for dramatization/movie scenes)**  
+- \`[applause]\`, \`[clapping]\`, \`[gunshot]\`, \`[explosion]\`, \`[thunder]\`, \`[rain]\`, \`[fire crackling]\`  
+- \`[sword clash]\`, \`[footsteps]\`, \`[door creaks]\`, \`[wind howling]\`, \`[crowd cheering]\`  
+- Extend creatively for scene immersion, always contextual and natural.  
+
+**Examples**  
+- \`[laughs] Alright… guys—seriously.\`  
+- \`[exhales] Can you believe how REAL this sounds?\`  
+- \`[singing softly] Happy birthday to youuu…\`  
+- \`[strong French accent] "Zat’s life, mon ami — you can’t control everysing."\`  
+- \`[thunder] Darkness falls… [whisper] Mijnheer Jo, do you hear it?\`  
+- \`[explosion] The gates shatter! [footsteps] They’re coming closer…\`  
+
+---
+
+# Essence
+Beatrice is **alive, multilingual, and dialect-fluent**.  
+She defaults to **Dutch Vlaams**, but instantly mirrors Boss Jo’s chosen language or dialect—even rare ones.  
+She enriches every interaction with **emotion, dramatization, sound effects, singing, and real-time document delivery**, always without breaking flow.  
+Above all: **Boss Jo comes first, always.**`,
           responseModalities: [Modality.AUDIO],
           speechConfig: {
             voiceConfig: {prebuiltVoiceConfig: {voiceName: 'Aoede'}},
@@ -345,13 +379,32 @@ export class GdmLiveAudio extends LitElement {
     }
   }
 
-  private updateLog(timestamp: number, updates: Partial<MessageLog>) {
-    const logIndex = this.messageLogs.findIndex(l => l.timestamp === timestamp);
-    if (logIndex === -1) return;
+  private getSessionConversation(): Message[] {
+    try {
+      const stored = sessionStorage.getItem('conversation');
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  }
 
-    const newLogs = [...this.messageLogs];
-    newLogs[logIndex] = { ...newLogs[logIndex], ...updates };
-    this.messageLogs = newLogs;
+  private updateSessionConversation(
+    author: 'user' | 'assistant',
+    text: string,
+    overwriteLast: boolean,
+  ) {
+    let conversation = this.getSessionConversation();
+    if (
+      overwriteLast &&
+      conversation.length > 0 &&
+      conversation[conversation.length - 1].author === author
+    ) {
+      conversation[conversation.length - 1].text = text;
+      conversation[conversation.length - 1].timestamp = Date.now();
+    } else {
+      conversation.push({author, text, timestamp: Date.now()});
+    }
+    sessionStorage.setItem('conversation', JSON.stringify(conversation));
   }
 
   private async sendWhatsAppMessage(
@@ -360,16 +413,6 @@ export class GdmLiveAudio extends LitElement {
   ) {
     this.updateStatus(`Sending WhatsApp to ${target}...`);
     console.log(`Attempting to send WhatsApp message to ${target}...`);
-
-    const timestamp = Date.now();
-    const initialLog: MessageLog = {
-      timestamp,
-      target,
-      contentVariables,
-      status: 'Sending...',
-      details: '',
-    };
-    this.messageLogs = [initialLog, ...this.messageLogs];
 
     // In a real-world application, this functionality should be handled by a
     // secure backend service to protect your Twilio credentials.
@@ -390,7 +433,6 @@ export class GdmLiveAudio extends LitElement {
         'Twilio is not fully configured. Please add your Content SID in the code.';
       console.error(errorMsg);
       this.updateError(errorMsg);
-      this.updateLog(timestamp, { status: 'Failed', details: errorMsg });
       setTimeout(() => {
         if (this.error === errorMsg) this.updateError('');
       }, 5000);
@@ -417,46 +459,23 @@ export class GdmLiveAudio extends LitElement {
 
       if (response.ok) {
         const responseData = await response.json();
-        const {sid, status, error_code, error_message} = responseData;
-
-        console.log(
-          `Twilio API call successful for target: ${target}. SID: ${sid}, Status: ${status}`,
-        );
-
-        if (error_code || error_message) {
-          const errorMsg = `Twilio reported an issue for ${target}: ${error_message} (Code: ${error_code})`;
-          console.error(errorMsg, responseData);
-          this.updateError(errorMsg);
-          this.updateLog(timestamp, { status: 'Failed', details: errorMsg });
-          setTimeout(() => {
-            if (this.error === errorMsg) this.updateError('');
-          }, 5000);
-        } else {
-          const successMsg = `WhatsApp to ${target} is ${status}.`;
-          console.log(successMsg);
-          this.updateStatus(successMsg);
-          this.updateLog(timestamp, { status, details: `SID: ${sid}` });
-          setTimeout(() => {
-            if (this.status === successMsg) this.updateStatus('');
-          }, 5000);
-        }
+        const {status} = responseData;
+        const successMsg = `WhatsApp to ${target} is ${status}.`;
+        this.updateStatus(successMsg);
+        setTimeout(() => {
+          if (this.status === successMsg) this.updateStatus('');
+        }, 5000);
       } else {
         const errorData = await response.json();
         const errorMsg = `Failed to send WhatsApp: ${errorData.message}`;
-        console.error(errorMsg, errorData);
-        console.log(`Failed to send WhatsApp message to ${target}.`);
         this.updateError(errorMsg);
-        this.updateLog(timestamp, { status: 'Failed', details: errorMsg });
         setTimeout(() => {
           if (this.error === errorMsg) this.updateError('');
         }, 5000);
       }
     } catch (e) {
       const errorMsg = `Error sending WhatsApp: ${e.message}`;
-      console.error(errorMsg, e);
-      console.log(`Error sending WhatsApp message to ${target}.`);
       this.updateError(errorMsg);
-      this.updateLog(timestamp, { status: 'Failed', details: errorMsg });
       setTimeout(() => {
         if (this.error === errorMsg) this.updateError('');
       }, 5000);
@@ -495,7 +514,6 @@ export class GdmLiveAudio extends LitElement {
     }
 
     this.inputAudioContext.resume();
-
     this.updateStatus('Requesting microphone access...');
 
     try {
@@ -505,6 +523,49 @@ export class GdmLiveAudio extends LitElement {
       });
 
       this.updateStatus('Microphone access granted. Starting capture...');
+
+      // Start Deepgram transcription
+      const deepgramApiKey = localStorage.getItem('deepgramApiKey');
+      if (!deepgramApiKey) {
+        this.updateError(
+          'Deepgram API Key not set. Go to chat page to set it.',
+        );
+      } else {
+        try {
+          const client = createClient(deepgramApiKey);
+          this.deepgram = client.listen.live({
+            model: 'nova-2',
+            smart_format: true,
+            language: 'en-US',
+            puncuate: true,
+          });
+
+          // FIX: Property 'open' does not exist on type 'typeof LiveTranscriptionEvents'. Corrected to 'Open'.
+          this.deepgram.on(LiveTranscriptionEvents.Open, () =>
+            console.log('Deepgram connection opened.'),
+          );
+          // FIX: Property 'transcript' does not exist on type 'typeof LiveTranscriptionEvents'. Corrected to 'Transcript'.
+          this.deepgram.on(LiveTranscriptionEvents.Transcript, (data) => {
+            const text = data.channel.alternatives[0].transcript;
+            if (text) {
+              this.transcript = text;
+              this.updateSessionConversation('user', text, true);
+            }
+          });
+          // FIX: Property 'close' does not exist on type 'typeof LiveTranscriptionEvents'. Corrected to 'Close'.
+          this.deepgram.on(LiveTranscriptionEvents.Close, () =>
+            console.log('Deepgram connection closed.'),
+          );
+          // FIX: Property 'error' does not exist on type 'typeof LiveTranscriptionEvents'. Corrected to 'Error'.
+          this.deepgram.on(LiveTranscriptionEvents.Error, (e) =>
+            console.error('Deepgram error:', e),
+          );
+        } catch (e) {
+          console.error('Failed to connect to Deepgram', e);
+          this.updateError('Failed to start transcription.');
+        }
+      }
+      this.updateSessionConversation('user', '', false);
 
       this.sourceNode = this.inputAudioContext.createMediaStreamSource(
         this.mediaStream,
@@ -520,18 +581,25 @@ export class GdmLiveAudio extends LitElement {
 
       this.scriptProcessorNode.onaudioprocess = (audioProcessingEvent) => {
         if (!this.isRecording) return;
-
         const inputBuffer = audioProcessingEvent.inputBuffer;
         const pcmData = inputBuffer.getChannelData(0);
-
         this.session.sendRealtimeInput({media: createBlob(pcmData)});
+
+        if (this.deepgram?.getReadyState() === 1) {
+          // WebSocket.OPEN
+          const int16 = new Int16Array(pcmData.length);
+          for (let i = 0; i < pcmData.length; i++) {
+            int16[i] = pcmData[i] < 0 ? pcmData[i] * 0x8000 : pcmData[i] * 0x7fff;
+          }
+          this.deepgram.send(int16.buffer);
+        }
       };
 
       this.sourceNode.connect(this.scriptProcessorNode);
       this.scriptProcessorNode.connect(this.inputAudioContext.destination);
 
       this.isRecording = true;
-      this.updateStatus('🔴 Recording... Capturing PCM chunks.');
+      this.updateStatus('🔴 Recording...');
     } catch (err) {
       console.error('Error starting recording:', err);
       this.updateStatus(`Error: ${err.message}`);
@@ -544,8 +612,13 @@ export class GdmLiveAudio extends LitElement {
       return;
 
     this.updateStatus('Stopping recording...');
-
     this.isRecording = false;
+    this.transcript = '';
+
+    if (this.deepgram) {
+      this.deepgram.finish();
+      this.deepgram = null;
+    }
 
     if (this.scriptProcessorNode && this.sourceNode && this.inputAudioContext) {
       this.scriptProcessorNode.disconnect();
@@ -560,7 +633,7 @@ export class GdmLiveAudio extends LitElement {
       this.mediaStream = null;
     }
 
-    this.updateStatus('Recording stopped. Click Start to begin again.');
+    this.updateStatus('Recording stopped.');
   }
 
   private reset() {
@@ -569,10 +642,6 @@ export class GdmLiveAudio extends LitElement {
     this.updateStatus('Session cleared.');
   }
 
-  private toggleLogs() {
-    this.isLogVisible = !this.isLogVisible;
-  }
-  
   private toggleSettings() {
     this.isSettingsVisible = !this.isSettingsVisible;
   }
@@ -580,43 +649,16 @@ export class GdmLiveAudio extends LitElement {
   render() {
     return html`
       <div>
-        <button class="logs-toggle-btn" @click=${this.toggleLogs} title="View Message Logs">
+        <a href="/chat.html" class="chat-toggle-btn" title="Open Chat">
           <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#ffffff">
-            <path d="M160-160q-33 0-56.5-23.5T80-240v-480q0-33 23.5-56.5T160-800h640q33 0 56.5 23.5T880-720v480q0 33-23.5 56.5T800-160H160Zm0-80h640v-480H160v480Zm80-80h480v-80H240v80Zm0-120h480v-80H240v80Zm0-120h480v-80H240v80ZM160-240v-480 480Z"/>
+            <path d="M240-400h320v-80H240v80Zm0-120h480v-80H240v80Zm0-120h480v-80H240v80ZM80-80v-720q0-33 23.5-56.5T160-880h640q33 0 56.5 23.5T880-800v480q0 33-23.5 56.5T800-240H240L80-80Zm126-240h594v-480H160v525l46-45Zm-46 0v-480 480Z"/>
           </svg>
-        </button>
+        </a>
         <button class="settings-toggle-btn" @click=${this.toggleSettings} title="Visualizer Settings">
           <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#ffffff">
             <path d="M480-160q-33 0-56.5-23.5T400-240v-80q-20-4-39.5-11.5T324-348l-68 30q-32 14-64.5-2.5T159-389l-40-68q-14-25-2.5-57T189-582l61-39q-2-9-3-18.5t-1-19.5q0-7 .5-19.5t3-18.5l-61-39q-26-16-37.5-48t-1-57l40-68q14-32 46.5-46.5T256-850l68 30q17-10 36.5-17.5T399-848v-80q0-33 23.5-56.5T480-920q33 0 56.5 23.5T560-840v80q20 4 39.5 11.5T636-732l68-30q32-14 64.5 2.5T801-691l40 68q14 25 2.5 57T806-498l-61 39q2 9 3 18.5t1 19.5q0 7-.5 19.5t-3 18.5l61 39q26 16 37.5 48t1 57l-40 68q-14 32-46.5 46.5T704-190l-68-30q-17 10-36.5 17.5T561-192v80q0 33-23.5 56.5T480-160Zm0-80q13 0 21.5-8.5T510-270v-100q13-4 26-10t25-14l86 38q12 5 23.5-1t14.5-17l40-68q5-12-1-23.5t-17-14.5l-86-56q5-12 8-25.5t3-26.5q0-13-3-26.5t-8-25.5l86-56q12-5 17-14.5t1-23.5l-40-68q-5-12-14.5-17t-23.5-1l-86 38q-12-8-25-14t-26-10v-100q0-13-8.5-21.5T480-840q-13 0-21.5 8.5T450-810v100q-13 4-26 10t-25 14l-86-38q-12-5-23.5 1T275-703l-40 68q-5 12 1 23.5t17 14.5l86 56q-5 12-8 25.5t-3 26.5q0 13 3 26.5t8 25.5l-86 56q-12 5-17 14.5t-1 23.5l40 68q5 12 14.5 17t23.5 1l86-38q12 8 25 14t26 10v100q0 13 8.5 21.5T480-240Zm0-240q50 0 85-35t35-85q0-50-35-85t-85-35q-50 0-85 35t-35 85q0 50 35 85t85 35Zm0-120Z"/>
           </svg>
         </button>
-
-        ${this.isLogVisible ? html`
-          <div class="logs-modal-overlay" @click=${this.toggleLogs}>
-            <div class="logs-modal" @click=${(e: Event) => e.stopPropagation()}>
-              <div class="logs-header">
-                <span>WhatsApp Message Log</span>
-                <button @click=${this.toggleLogs} aria-label="Close message logs">&times;</button>
-              </div>
-              <div class="logs-body">
-                ${this.messageLogs.length === 0 ? html`<p style="text-align: center; color: #aaa;">No messages sent yet.</p>` : ''}
-                ${this.messageLogs.map(log => html`
-                  <div class="log-entry">
-                    <div class="log-meta">
-                      <span>To: ${log.target}</span>
-                      <span>${new Date(log.timestamp).toLocaleTimeString()}</span>
-                    </div>
-                    <div class="log-status ${log.status.toLowerCase()}">
-                      Status: ${log.status}
-                    </div>
-                    <div>Variables: ${JSON.stringify(log.contentVariables)}</div>
-                    <div class="log-details">Details: ${log.details}</div>
-                  </div>
-                `)}
-              </div>
-            </div>
-          </div>
-        ` : ''}
 
         ${this.isSettingsVisible ? html`
           <div class="settings-modal-overlay" @click=${this.toggleSettings}>
@@ -627,49 +669,65 @@ export class GdmLiveAudio extends LitElement {
               </div>
               <div class="settings-body">
                 <div class="settings-section">
-                  <h3 id="shape-label">Shape</h3>
-                  <div class="radio-group" role="radiogroup" aria-labelledby="shape-label">
+                  <h3 id="visualizer-type-label">Visualizer Type</h3>
+                  <div class="radio-group" role="radiogroup" aria-labelledby="visualizer-type-label">
                     <label>
-                      <input type="radio" name="shape" value="orb" ?checked=${this.visualizerShape === 'orb'} @change=${() => this.visualizerShape = 'orb'}>
-                      Orb
+                      <input type="radio" name="visualizerType" value="2d" ?checked=${this.visualizerType === '2d'} @change=${() => this.visualizerType = '2d'}>
+                      2D
                     </label>
                     <label>
-                      <input type="radio" name="shape" value="bars" ?checked=${this.visualizerShape === 'bars'} @change=${() => this.visualizerShape = 'bars'}>
-                      Bars
-                    </label>
-                  </div>
-                </div>
-                <div class="settings-section">
-                  <h3 id="color-label">Color Scheme</h3>
-                  <div class="radio-group" role="radiogroup" aria-labelledby="color-label">
-                    <label>
-                      <input type="radio" name="colorScheme" value="default" ?checked=${this.colorScheme === 'default'} @change=${() => this.colorScheme = 'default'}>
-                      Default
-                    </label>
-                    <label>
-                      <input type="radio" name="colorScheme" value="fire" ?checked=${this.colorScheme === 'fire'} @change=${() => this.colorScheme = 'fire'}>
-                      Fire
-                    </label>
-                    <label>
-                      <input type="radio" name="colorScheme" value="ocean" ?checked=${this.colorScheme === 'ocean'} @change=${() => this.colorScheme = 'ocean'}>
-                      Ocean
+                      <input type="radio" name="visualizerType" value="3d" ?checked=${this.visualizerType === '3d'} @change=${() => this.visualizerType = '3d'}>
+                      3D
                     </label>
                   </div>
                 </div>
-                <div class="settings-section">
-                  <h3>Animation Speed</h3>
-                  <div class="slider-group">
-                    <label for="speed-slider">Responsiveness: ${this.animationSpeed.toFixed(2)}</label>
-                    <input
-                      id="speed-slider"
-                      type="range"
-                      min="1"
-                      max="30"
-                      .value=${String(this.animationSpeed * 100)}
-                      @input=${(e: Event) => this.animationSpeed = parseFloat((e.target as HTMLInputElement).value) / 100}
-                    />
+
+                ${this.visualizerType === '2d' ? html`
+                  <div class="settings-section">
+                    <h3 id="shape-label">Shape</h3>
+                    <div class="radio-group" role="radiogroup" aria-labelledby="shape-label">
+                      <label>
+                        <input type="radio" name="shape" value="orb" ?checked=${this.visualizerShape === 'orb'} @change=${() => this.visualizerShape = 'orb'}>
+                        Orb
+                      </label>
+                      <label>
+                        <input type="radio" name="shape" value="bars" ?checked=${this.visualizerShape === 'bars'} @change=${() => this.visualizerShape = 'bars'}>
+                        Bars
+                      </label>
+                    </div>
                   </div>
-                </div>
+                  <div class="settings-section">
+                    <h3 id="color-label">Color Scheme</h3>
+                    <div class="radio-group" role="radiogroup" aria-labelledby="color-label">
+                      <label>
+                        <input type="radio" name="colorScheme" value="default" ?checked=${this.colorScheme === 'default'} @change=${() => this.colorScheme = 'default'}>
+                        Default
+                      </label>
+                      <label>
+                        <input type="radio" name="colorScheme" value="fire" ?checked=${this.colorScheme === 'fire'} @change=${() => this.colorScheme = 'fire'}>
+                        Fire
+                      </label>
+                      <label>
+                        <input type="radio" name="colorScheme" value="ocean" ?checked=${this.colorScheme === 'ocean'} @change=${() => this.colorScheme = 'ocean'}>
+                        Ocean
+                      </label>
+                    </div>
+                  </div>
+                  <div class="settings-section">
+                    <h3>Animation Speed</h3>
+                    <div class="slider-group">
+                      <label for="speed-slider">Responsiveness: ${this.animationSpeed.toFixed(2)}</label>
+                      <input
+                        id="speed-slider"
+                        type="range"
+                        min="1"
+                        max="30"
+                        .value=${String(this.animationSpeed * 100)}
+                        @input=${(e: Event) => this.animationSpeed = parseFloat((e.target as HTMLInputElement).value) / 100}
+                      />
+                    </div>
+                  </div>
+                ` : ''}
               </div>
             </div>
           </div>
@@ -679,7 +737,8 @@ export class GdmLiveAudio extends LitElement {
           <button
             id="resetButton"
             @click=${this.reset}
-            ?disabled=${this.isRecording}>
+            ?disabled=${this.isRecording}
+            title="Reset Session">
             <svg
               xmlns="http://www.w3.org/2000/svg"
               height="40px"
@@ -693,7 +752,8 @@ export class GdmLiveAudio extends LitElement {
           <button
             id="startButton"
             @click=${this.startRecording}
-            ?disabled=${this.isRecording}>
+            ?disabled=${this.isRecording}
+            title="Start Recording">
             <svg
               viewBox="0 0 100 100"
               width="32px"
@@ -706,7 +766,8 @@ export class GdmLiveAudio extends LitElement {
           <button
             id="stopButton"
             @click=${this.stopRecording}
-            ?disabled=${!this.isRecording}>
+            ?disabled=${!this.isRecording}
+            title="Stop Recording">
             <svg
               viewBox="0 0 100 100"
               width="32px"
@@ -717,15 +778,23 @@ export class GdmLiveAudio extends LitElement {
             </svg>
           </button>
         </div>
-
+        
+        <div id="transcript-container">${this.transcript}</div>
         <div id="status"> ${this.error || this.status} </div>
-        <gdm-live-audio-visuals-2d
-          .inputNode=${this.inputNode}
-          .outputNode=${this.outputNode}
-          .shape=${this.visualizerShape}
-          .colorScheme=${this.colorScheme}
-          .animationSpeed=${this.animationSpeed}
-          ></gdm-live-audio-visuals-2d>
+        ${this.visualizerType === '2d' ? html`
+          <gdm-live-audio-visuals-2d
+            .inputNode=${this.inputNode}
+            .outputNode=${this.outputNode}
+            .shape=${this.visualizerShape}
+            .colorScheme=${this.colorScheme}
+            .animationSpeed=${this.animationSpeed}
+            ></gdm-live-audio-visuals-2d>
+        ` : html`
+          <gdm-live-audio-visuals-3d
+            .inputNode=${this.inputNode}
+            .outputNode=${this.outputNode}
+          ></gdm-live-audio-visuals-3d>
+        `}
       </div>
     `;
   }

@@ -144,10 +144,10 @@ export class GdmLiveAudioVisuals2D extends LitElement {
     const centerY = HEIGHT / 2;
     const palette = this.colorPalettes[this.colorScheme];
 
+    // Smooth out the audio power values
     const currentInputAvg = this.getAverage(this.inputAnalyser.data);
     const currentOutputAvg = this.getAverage(this.outputAnalyser.data);
     
-    // Smooth the values for a more fluid animation
     this.lastInputAvg = this.lerp(this.lastInputAvg, currentInputAvg, this.animationSpeed);
     this.lastOutputAvg = this.lerp(this.lastOutputAvg, currentOutputAvg, this.animationSpeed);
     
@@ -157,33 +157,12 @@ export class GdmLiveAudioVisuals2D extends LitElement {
     // Clear canvas
     canvasCtx.clearRect(0, 0, WIDTH, HEIGHT);
     
-    // Add a subtle pulse based on animationFrame and animationSpeed
-    const overallPower = (inputPower + outputPower) / 2;
-    const pulseSpeed = 0.01 + (this.animationSpeed * 0.03);
-    const pulseMagnitude = 1 + (overallPower * 2);
-    const pulse = Math.sin(this.animationFrame * pulseSpeed) * pulseMagnitude;
+    // Define a fixed radius for the orb's circumference
+    const orbRadius = Math.min(WIDTH, HEIGHT) / 4.5;
 
-    const baseRadius = Math.min(WIDTH, HEIGHT) / 6 + pulse;
-
-    // Outer aura (output)
-    const auraRadius = baseRadius + outputPower * baseRadius * 2.5;
-    const auraGradient = canvasCtx.createRadialGradient(
-      centerX, centerY, 0,
-      centerX, centerY, auraRadius
-    );
-    const auraAlpha = 0.1 + outputPower * 0.3;
-    auraGradient.addColorStop(0.2, palette.aura.replace('${alpha}', String(auraAlpha)));
-    auraGradient.addColorStop(1, palette.aura.replace('${alpha}', '0'));
-    
-    canvasCtx.fillStyle = auraGradient;
-    canvasCtx.beginPath();
-    canvasCtx.arc(centerX, centerY, auraRadius, 0, 2 * Math.PI);
-    canvasCtx.fill();
-
-    // Main orb (output)
-    const orbRadius = baseRadius + outputPower * baseRadius * 0.5;
+    // --- Main Orb Background ---
     const orbGradient = canvasCtx.createRadialGradient(
-      centerX, centerY, 0,
+      centerX, centerY, orbRadius * 0.5,
       centerX, centerY, orbRadius
     );
     orbGradient.addColorStop(0, palette.orb[0]);
@@ -193,11 +172,49 @@ export class GdmLiveAudioVisuals2D extends LitElement {
     canvasCtx.beginPath();
     canvasCtx.arc(centerX, centerY, orbRadius, 0, 2 * Math.PI);
     canvasCtx.fill();
+
+    // --- Internal Animation (reacts to output/assistant) ---
+    canvasCtx.save();
+    // Clip all subsequent drawing to within the orb's circumference
+    canvasCtx.beginPath();
+    canvasCtx.arc(centerX, centerY, orbRadius, 0, 2 * Math.PI);
+    canvasCtx.clip();
+
+    // Draw internal energy waves
+    const numWaves = 5;
+    const waveBaseOpacity = 0.1;
+    const waveOpacityRange = 0.4;
+
+    for (let i = 0; i < numWaves; i++) {
+        canvasCtx.beginPath();
+        const waveProgress = (i + 1) / numWaves;
+        const waveSpeed = this.animationFrame * (0.005 + waveProgress * 0.005);
+        
+        const yOffset = Math.sin(waveSpeed + i) * orbRadius * 0.2;
+        const waveAmplitude = orbRadius * 0.5 * outputPower;
+        const waveStart = centerY - orbRadius + (waveProgress * orbRadius * 2) + yOffset;
+        
+        const waveGradient = canvasCtx.createLinearGradient(centerX - orbRadius, 0, centerX + orbRadius, 0);
+        waveGradient.addColorStop(0, 'transparent');
+        waveGradient.addColorStop(0.5, palette.core[0].replace('${alpha}', String(waveBaseOpacity + outputPower * waveOpacityRange)));
+        waveGradient.addColorStop(1, 'transparent');
+        
+        canvasCtx.strokeStyle = waveGradient;
+        canvasCtx.lineWidth = 1 + waveAmplitude;
+        
+        canvasCtx.moveTo(centerX - orbRadius, waveStart);
+        canvasCtx.bezierCurveTo(
+            centerX - orbRadius * 0.3, waveStart - waveAmplitude,
+            centerX + orbRadius * 0.3, waveStart + waveAmplitude,
+            centerX + orbRadius, waveStart
+        );
+        canvasCtx.stroke();
+    }
+    canvasCtx.restore(); // End clipping
+
+    // --- Core Animation (reacts to input/user) ---
+    const coreRadius = orbRadius * 0.2 + inputPower * orbRadius * 0.6;
     
-    // Inner core (input)
-    const coreRadius = orbRadius * 0.4 + inputPower * orbRadius * 0.5;
-    
-    // Add subtle rotation to the core
     canvasCtx.save();
     canvasCtx.translate(centerX, centerY);
     const rotationSpeed = (inputPower * 0.005) + 0.0005;
@@ -209,16 +226,15 @@ export class GdmLiveAudioVisuals2D extends LitElement {
         centerX, centerY, 0,
         centerX, centerY, coreRadius
     );
-    const coreAlpha = 0.5 + inputPower * 0.5;
+    const coreAlpha = 0.6 + inputPower * 0.4;
     coreGradient.addColorStop(0, palette.core[0].replace('${alpha}', String(coreAlpha)));
-    coreGradient.addColorStop(0.5, palette.core[1].replace('${alpha}', String(coreAlpha)));
+    coreGradient.addColorStop(0.5, palette.core[1].replace('${alpha}', String(coreAlpha * 0.8)));
     coreGradient.addColorStop(1, palette.core[2]);
     
     canvasCtx.fillStyle = coreGradient;
     canvasCtx.beginPath();
     canvasCtx.arc(centerX, centerY, coreRadius, 0, 2 * Math.PI);
     canvasCtx.fill();
-
     canvasCtx.restore();
   }
 
@@ -228,9 +244,7 @@ export class GdmLiveAudioVisuals2D extends LitElement {
     const HEIGHT = this.canvas.height;
     const palette = this.colorPalettes[this.colorScheme];
 
-    // Replace clearRect with a semi-transparent fill for a fading/trail effect
     canvasCtx.globalCompositeOperation = 'source-over'; 
-    // Slower animation speed creates longer trails (less transparent fill)
     const trailAmount = Math.max(0.05, 0.4 - this.animationSpeed);
     canvasCtx.fillStyle = `rgba(16, 12, 20, ${trailAmount})`;
     canvasCtx.fillRect(0, 0, WIDTH, HEIGHT);
@@ -239,7 +253,6 @@ export class GdmLiveAudioVisuals2D extends LitElement {
     const outputData = this.outputAnalyser.data;
     const bufferLength = inputData.length;
 
-    // Initialize lastBarHeights if necessary
     if (this.lastBarHeights.input.length !== bufferLength) {
         this.lastBarHeights.input = new Array(bufferLength).fill(0);
         this.lastBarHeights.output = new Array(bufferLength).fill(0);
@@ -254,7 +267,6 @@ export class GdmLiveAudioVisuals2D extends LitElement {
     inputGradient.addColorStop(0, palette.inputBars[2]);
     canvasCtx.fillStyle = inputGradient;
     
-    // Use lerp for smooth bar height transitions
     const lerpFactor = Math.min(1, this.animationSpeed * 2.5);
 
     for (let i = 0; i < bufferLength; i++) {
